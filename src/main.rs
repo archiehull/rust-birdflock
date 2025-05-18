@@ -14,20 +14,38 @@ struct Bird {
 }
 
 impl Bird {
+    // Create a new bird with random position and velocity
     fn new<R: Rng>(rng: &mut R) -> Self {
         Bird {
-            position: Vector3::new(rng.random_range(-5.0..5.0), rng.random_range(-5.0..5.0), rng.random_range(-5.0..5.0)),
-            velocity: Vector3::new(rng.random_range(-1.0..1.0), rng.random_range(-1.0..1.0), rng.random_range(-1.0..1.0)),
+            position: Vector3::new(
+                rng.random_range(-5.0..5.0),
+                rng.random_range(-5.0..5.0),
+                rng.random_range(-5.0..5.0)
+            ),
+            velocity: Vector3::new(
+                rng.random_range(-1.0..1.0),
+                rng.random_range(-1.0..1.0),
+                rng.random_range(-1.0..1.0)
+            ),
             acceleration: Vector3::zeros(),
         }
     }
 }
 
-const NUM_BIRDS: usize = 100;
+const NUM_BIRDS: usize = 1000;
 
-const DIMENSIONS: f32 = 10.0;
+const POV_DISTANCE: f32 = 15.0;
+
+const DIMENSIONS: f32 = 7.5;
 const SPACE_MIN: f32 = -DIMENSIONS;
 const SPACE_MAX: f32 = DIMENSIONS;
+
+const SEPARATION_WEIGHT: f32 = 1.5;    // flock tightness
+const ALIGNMENT_WEIGHT:  f32 = 2.0;    // movement coordination
+const COHESION_WEIGHT:   f32 = 1.5;    // flock unification
+const PERCEPTION_RADIUS: f32 = 1.9;    // flock size
+const MAX_SPEED:         f32 = 0.25;
+const MAX_FORCE:         f32 = 0.03;   // sharpness of movement
 
 fn wraparound(mut v: Vector3<f32>) -> Vector3<f32> {
     for i in 0..3 {
@@ -40,6 +58,14 @@ fn wraparound(mut v: Vector3<f32>) -> Vector3<f32> {
     v
 }
 
+fn limit_vec(v: Vector3<f32>, max: f32) -> Vector3<f32> {
+    if v.norm() > max {
+        v.normalize() * max
+    } else {
+        v
+    }
+}
+
 fn main() {
     #[allow(unused_imports)]
     use glium::{glutin, Surface};
@@ -48,7 +74,7 @@ fn main() {
         .build()
         .expect("event loop building");
     let (window, display) = glium::backend::glutin::SimpleWindowBuilder::new()
-        .with_title("Triangles")
+        .with_title("Bird Flocking Simulation")
         .build(&event_loop);
 
     #[derive(Copy, Clone)]
@@ -58,6 +84,7 @@ fn main() {
 
     implement_vertex!(Vertex, position);
 
+    // Create a triangle shape
     let vertex1 = Vertex { position: [-0.05, -0.0288] };
     let vertex2 = Vertex { position: [ 0.00,  0.0577] };
     let vertex3 = Vertex { position: [ 0.05, -0.0288] };
@@ -80,6 +107,7 @@ fn main() {
         }
     "#;
 
+    // bird colour
     let fragment_shader_src = r#"
         #version 140
 
@@ -92,10 +120,9 @@ fn main() {
 
     let program = glium::Program::from_source(&display, vertex_shader_src, fragment_shader_src, None).unwrap();
 
+    // Initialize birds with random positions and velocities
     let mut rng = rand::rng();
     let mut birds: Vec<Bird> = (0..NUM_BIRDS).map(|_| Bird::new(&mut rng)).collect();
-
-    let mut delta_t: f32 = -0.5;
 
     #[allow(deprecated)] 
     let _ = event_loop.run(move |event, window_target| {
@@ -113,14 +140,11 @@ fn main() {
                     winit::event_loop::ControlFlow::WaitUntil(next_frame_time);
 
                     // --- Flocking update (parallel) ---
-                    let perception_radius = 2.0;
-                    let max_speed = 0.3;
-                    let separation_weight = 1.5;
-                    let alignment_weight = 1.0;
-                    let cohesion_weight = 1.0;
 
+                    // Clone birds for safe parallel neighbor access
                     let birds_snapshot = birds.clone();
 
+                    // Update each bird in parallel
                     birds.par_iter_mut().for_each(|bird| {
                         let mut separation = Vector3::zeros();
                         let mut alignment = Vector3::zeros();
@@ -129,14 +153,10 @@ fn main() {
 
                         for other in &birds_snapshot {
                             let distance = (bird.position - other.position).norm();
-                            if distance > 0.0 && distance < perception_radius {
-                                // Separation
+                            if distance > 0.0 && distance < PERCEPTION_RADIUS {
+
                                 separation += (bird.position - other.position) / distance;
-
-                                // Alignment
                                 alignment += other.velocity;
-
-                                // Cohesion
                                 cohesion += other.position;
 
                                 total += 1;
@@ -146,31 +166,41 @@ fn main() {
                         if total > 0 {
                             // Separation
                             separation /= total as f32;
+                            if separation.norm() > 0.0 {
+                                separation = separation.normalize() * MAX_SPEED - bird.velocity;
+                                separation = limit_vec(separation, MAX_FORCE);
+                            }
 
                             // Alignment
                             alignment /= total as f32;
-                            alignment -= bird.velocity;
+                            if alignment.norm() > 0.0 {
+                                alignment = alignment.normalize() * MAX_SPEED - bird.velocity;
+                                alignment = limit_vec(alignment, MAX_FORCE);
+                            }
 
                             // Cohesion
                             cohesion /= total as f32;
-                            cohesion -= bird.position;
+                            cohesion = cohesion - bird.position;
+                            if cohesion.norm() > 0.0 {
+                                cohesion = cohesion.normalize() * MAX_SPEED - bird.velocity;
+                                cohesion = limit_vec(cohesion, MAX_FORCE);
+                            }
                         }
-
+                        
                         // Combine with weights
                         bird.acceleration =
-                            separation_weight * separation +
-                            alignment_weight * alignment +
-                            cohesion_weight * cohesion;
-
-                        // Velocity update
+                            SEPARATION_WEIGHT * separation +
+                            ALIGNMENT_WEIGHT * alignment +
+                            COHESION_WEIGHT * cohesion;
+                        
+                        // Velocity update and limit speed
                         bird.velocity += bird.acceleration;
-                        if bird.velocity.norm() > max_speed {
-                            bird.velocity = bird.velocity.normalize() * max_speed;
+                        if bird.velocity.norm() > MAX_SPEED {
+                            bird.velocity = bird.velocity.normalize() * MAX_SPEED;
                         }
-
+                        
                         // Position update
                         bird.position += bird.velocity;
-
                         bird.position = wraparound(bird.position);
                     });
 
@@ -180,7 +210,7 @@ fn main() {
 
                     let perspective = Perspective3::new(1.0, std::f32::consts::FRAC_PI_3, 0.1, 100.0);
                     let projection_matrix: [[f32; 4]; 4] = *perspective.as_matrix().as_ref();
-                    let eye = Point3::new(0.0, 0.0, 20.0);
+                    let eye = Point3::new(0.0, 0.0, POV_DISTANCE);
                     let look = Point3::origin();
                     let up = Vector3::y();
                     let view_matrix: [[f32; 4]; 4] = *Matrix4::look_at_rh(&eye, &look, &up).as_ref();
