@@ -32,9 +32,9 @@ impl Bird {
     }
 }
 
-const NUM_BIRDS: usize = 1000;
+const NUM_BIRDS: usize = 750;
 
-const POV_DISTANCE: f32 = 15.0;
+const POV_DISTANCE: f32 = 17.5;
 
 const DIMENSIONS: f32 = 7.5;
 const SPACE_MIN: f32 = -DIMENSIONS;
@@ -44,7 +44,7 @@ const SEPARATION_WEIGHT: f32 = 1.5;    // flock tightness
 const ALIGNMENT_WEIGHT:  f32 = 2.0;    // movement coordination
 const COHESION_WEIGHT:   f32 = 1.5;    // flock unification
 const PERCEPTION_RADIUS: f32 = 1.9;    // flock size
-const MAX_SPEED:         f32 = 0.25;
+const MAX_SPEED:         f32 = 0.125;
 const MAX_FORCE:         f32 = 0.03;   // sharpness of movement
 
 fn wraparound(mut v: Vector3<f32>) -> Vector3<f32> {
@@ -111,10 +111,18 @@ fn main() {
     let fragment_shader_src = r#"
         #version 140
 
+        uniform float depth; // z position of the bird
+
         out vec4 color;
 
         void main() {
-            color = vec4(1.0, 0.0, 0.0, 1.0);
+            // Map depth (e.g. -7.5 to 7.5) to [0,1]
+            float t = clamp((depth + 7.5) / 15.0, 0.0, 1.0);
+            // Example: from red (far) to white (close)
+            vec3 near_col = vec3(1.0, 1.0, 1.0);   // white when close
+            vec3 far_col = vec3(1.0, 0.2, 0.2);    // red when far
+            vec3 bird_col = mix(far_col, near_col, 1.0 - t);
+            color = vec4(bird_col, 1.0);
         }
     "#;
 
@@ -226,6 +234,7 @@ fn main() {
                             model: model_matrix,
                             view: view_matrix,
                             projection: projection_matrix,
+                            depth: bird.position.z, // Pass z position
                         };
                         target.draw(&vertex_buffer, &indices, &program, &uniforms, &Default::default()).unwrap();
                     }
