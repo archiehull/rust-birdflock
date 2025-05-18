@@ -5,6 +5,28 @@ extern crate winit;
 use nalgebra::{Matrix4, Perspective3, Point3, Vector3}; // Add nalgebra for matrix calculations
 use rand::Rng;
 use rayon::prelude::*;
+use std::time::Instant;
+
+const SHOW_TIMES: bool = false;
+const SHOW_POSITIONS: bool = true;
+const SHOWTIMES_EVERY: usize = 10;
+
+const NUM_BIRDS: usize = 750;
+
+const POV_DISTANCE: f32 = 17.5;
+
+const DIMENSIONS: f32 = 7.5;
+const SPACE_MIN: f32 = -DIMENSIONS;
+const SPACE_MAX: f32 = DIMENSIONS;
+
+const SEPARATION_WEIGHT: f32 = 1.5;    // flock tightness
+const ALIGNMENT_WEIGHT:  f32 = 2.0;    // movement coordination
+const COHESION_WEIGHT:   f32 = 1.5;    // flock unification
+const PERCEPTION_RADIUS: f32 = 1.9;    // flock size
+const MAX_SPEED:         f32 = 0.125;
+const MAX_FORCE:         f32 = 0.03;   // sharpness of movement
+
+
 
 #[derive(Clone)]
 struct Bird {
@@ -31,21 +53,6 @@ impl Bird {
         }
     }
 }
-
-const NUM_BIRDS: usize = 750;
-
-const POV_DISTANCE: f32 = 17.5;
-
-const DIMENSIONS: f32 = 7.5;
-const SPACE_MIN: f32 = -DIMENSIONS;
-const SPACE_MAX: f32 = DIMENSIONS;
-
-const SEPARATION_WEIGHT: f32 = 1.5;    // flock tightness
-const ALIGNMENT_WEIGHT:  f32 = 2.0;    // movement coordination
-const COHESION_WEIGHT:   f32 = 1.5;    // flock unification
-const PERCEPTION_RADIUS: f32 = 1.9;    // flock size
-const MAX_SPEED:         f32 = 0.125;
-const MAX_FORCE:         f32 = 0.03;   // sharpness of movement
 
 fn wraparound(mut v: Vector3<f32>) -> Vector3<f32> {
     for i in 0..3 {
@@ -132,6 +139,9 @@ fn main() {
     let mut rng = rand::rng();
     let mut birds: Vec<Bird> = (0..NUM_BIRDS).map(|_| Bird::new(&mut rng)).collect();
 
+    let mut step_count = 0;
+    let mut perf_start = Instant::now();
+
     #[allow(deprecated)] 
     let _ = event_loop.run(move |event, window_target| {
         match event {
@@ -144,8 +154,9 @@ fn main() {
 
                 winit::event::WindowEvent::RedrawRequested => {
 
-                    let next_frame_time = std::time::Instant::now() + std::time::Duration::from_nanos(16_666_667);
-                    winit::event_loop::ControlFlow::WaitUntil(next_frame_time);
+                    if SHOW_TIMES && step_count == 0 {
+                        perf_start = Instant::now();
+                    }
 
                     // --- Flocking update (parallel) ---
 
@@ -153,7 +164,7 @@ fn main() {
                     let birds_snapshot = birds.clone();
 
                     // Update each bird in parallel
-                    birds.par_iter_mut().for_each(|bird| {
+                    birds.par_iter_mut().enumerate().for_each(|(i, bird)| {
                         let mut separation = Vector3::zeros();
                         let mut alignment = Vector3::zeros();
                         let mut cohesion = Vector3::zeros();
@@ -210,6 +221,13 @@ fn main() {
                         // Position update
                         bird.position += bird.velocity;
                         bird.position = wraparound(bird.position);
+
+                        if SHOW_POSITIONS {
+                            println!(
+                                "Bird {}: pos={:?} vel={:?} sep={:?} ali={:?} coh={:?}",
+                                i, bird.position, bird.velocity, separation, alignment, cohesion
+                            );
+                        }
                     });
 
                     // --- Rendering ---
@@ -240,6 +258,20 @@ fn main() {
                     }
 
                     target.finish().unwrap();
+
+                    if SHOW_TIMES {
+                        step_count += 1;
+                        if step_count >= SHOWTIMES_EVERY {
+                            let elapsed = perf_start.elapsed();
+                            println!(
+                                "Simulated {} steps in {:.3} seconds ({:.3} ms/step)",
+                                SHOWTIMES_EVERY,
+                                elapsed.as_secs_f64(),
+                                elapsed.as_secs_f64() * 1000.0 / SHOWTIMES_EVERY as f64
+                            );
+                            step_count = 0;
+                        }
+                    }
                 },
                 _ => (),
             },                
