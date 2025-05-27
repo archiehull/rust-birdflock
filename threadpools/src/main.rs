@@ -9,13 +9,16 @@ use std::time::Instant;
 use threadpool::ThreadPool;
 use num_cpus;
 
-const SHOW_VISUALS: bool = true;
+const SHOW_VISUALS: bool = false;
 const SHOW_TIMES: bool = true;
 const SHOW_POSITIONS: bool = false;
-const SHOWTIMES_EVERY: usize = 1000;
+const SHOWTIMES_EVERY: usize = 100;
+const PRINT_EVERY: bool = false; // Print every SHOWTIMES_EVERY steps
+
+const SUMMARY_EVERY: usize = 1000;
 
 
-const NUM_BIRDS: usize = 750; // Increase bird count for better performance comparison
+const NUM_BIRDS: usize = 5000;
 
 const POV_DISTANCE: f32 = 17.5;
 
@@ -221,7 +224,24 @@ fn main() {
     let pool = ThreadPool::new(num_threads);
 
     let mut step_count = 0;
+    let mut total_steps = 0;
     let mut perf_start = Instant::now();
+    let mut summary_start = Instant::now();
+
+    let mut total_force_calc_time = 0.0;
+    let mut total_position_update_time = 0.0;
+    let mut total_overhead_time = 0.0;
+
+    let mut cumulative_force_time = 0.0;
+    let mut cumulative_position_time = 0.0;
+    let mut cumulative_overhead_time = 0.0;
+
+    println!("\n\nStarting simulation with {} birds and {} threads", NUM_BIRDS, num_threads);
+    if SHOW_VISUALS {
+        println!("Visuals enabled.\n");
+    } else {
+        println!("Visuals disabled.\n");
+    }
 
     #[allow(deprecated)] 
     let _ = event_loop.run(move |event, window_target| {
@@ -238,6 +258,12 @@ fn main() {
                         perf_start = Instant::now();
                     }
 
+                    if total_steps == 0 {
+                        summary_start = Instant::now();
+                    }
+
+                    let step_start = Instant::now();
+
                     // --- Flocking update with thread pool ---
                     
                     // Create a snapshot of the current state for read-only access
@@ -252,6 +278,8 @@ fn main() {
                     
                     // Use a counter to track completed jobs instead of a barrier
                     let completed_count = Arc::new(Mutex::new(0));
+
+                    let force_start = Instant::now();
                     
                     for thread_id in 0..num_tasks {
                         let start = thread_id * chunk_size;
@@ -281,20 +309,24 @@ fn main() {
                             *count += 1;
                         });
                     }
+
+                    let force_calc_time = force_start.elapsed().as_secs_f64();
+                    total_force_calc_time += force_calc_time;
+                    cumulative_force_time += force_calc_time;
                     
                     // Wait for all tasks to complete
                     let wait_start = Instant::now();
                     while *completed_count.lock().unwrap() < num_tasks {
-                        // Add a small timeout to avoid blocking the main thread completely
-                        std::thread::sleep(std::time::Duration::from_millis(1));
-                        
+                        std::thread::sleep(std::time::Duration::from_micros(10));
+
                         // Safety timeout - don't wait forever if there's a problem
                         if wait_start.elapsed().as_secs() > 5 {
                             println!("Warning: Tasks taking too long, continuing anyway");
                             break;
                         }
                     }
-                    
+
+                    let pos_update_start = Instant::now();
                     // Update birds with the calculated results
                     let results_guard = results.lock().unwrap();
                     for (i, &(position, velocity)) in results_guard.iter().enumerate() {
@@ -303,6 +335,10 @@ fn main() {
                         birds[i].acceleration = Vector3::zeros(); // Reset acceleration
                     }
 
+                    let position_update_time = pos_update_start.elapsed().as_secs_f64();
+                    total_position_update_time += position_update_time;
+                    cumulative_position_time += position_update_time;
+                    
                     // --- Rendering ---
                     if SHOW_VISUALS {
                         let mut target = display.draw();
@@ -334,17 +370,68 @@ fn main() {
                         target.finish().unwrap();
                     }
 
+                    let overhead_time = step_start.elapsed().as_secs_f64() - (force_calc_time + position_update_time);
+                    total_overhead_time += overhead_time;
+                    cumulative_overhead_time += overhead_time;
+
                     if SHOW_TIMES {
                         step_count += 1;
-                        if step_count >= SHOWTIMES_EVERY {
+                        total_steps += 1;
+
+                        if step_count % SHOWTIMES_EVERY == 0 && PRINT_EVERY {
                             let elapsed = perf_start.elapsed();
+                            let avg_time_per_step = elapsed.as_secs_f64() / SHOWTIMES_EVERY as f64;
+                            let fps = 1.0 / avg_time_per_step;
+                            
+                             
+                            let avg_force_calc = total_force_calc_time / SHOWTIMES_EVERY as f64;
+                            let avg_position_update = total_position_update_time / SHOWTIMES_EVERY as f64;
+                            let avg_overhead = total_overhead_time / SHOWTIMES_EVERY as f64;
+
                             println!(
-                                "Simulated {} steps in {:.3} seconds ({:.3} ms/step)",
-                                SHOWTIMES_EVERY,
+                                "Simulated steps {}-{} in {:.3} seconds ({:.3} ms/step, {:.2} FPS)",
+                                step_count-SHOWTIMES_EVERY,
+                                step_count,
                                 elapsed.as_secs_f64(),
-                                elapsed.as_secs_f64() * 1000.0 / SHOWTIMES_EVERY as f64
+                                avg_time_per_step * 1000.0,
+                                fps
                             );
-                            step_count = 0;
+                            println!(
+                                "Force calculation: {:.3} ms | Position update: {:.3} ms | Overhead: {:.3} ms",
+                                avg_force_calc * 1000.0,
+                                avg_position_update * 1000.0,
+                                avg_overhead * 1000.0,
+                            );
+                            
+                            // Reset counters for the next batch
+                            total_force_calc_time = 0.0;
+                            total_position_update_time = 0.0;
+                            total_overhead_time = 0.0;
+                            perf_start = Instant::now();
+                        }
+
+                        if total_steps % SUMMARY_EVERY == 0 {
+                            let summary_elapsed = summary_start.elapsed();
+                            let avg_fps = SUMMARY_EVERY as f64 / summary_elapsed.as_secs_f64();
+
+                            let avg_force = (cumulative_force_time / SUMMARY_EVERY as f64) * 1000.0;
+                            let avg_position = (cumulative_position_time / SUMMARY_EVERY as f64) * 1000.0;
+                            let avg_overhead = (cumulative_overhead_time / SUMMARY_EVERY as f64) * 1000.0;
+
+                            println!(
+                                "\n\nSimulated {} steps in {:.3} seconds at {:.2} FPS avg",
+                                SUMMARY_EVERY,
+                                summary_elapsed.as_secs_f64(),
+                                avg_fps
+                            );
+                            println!(
+                                "Average Force calculation: {:.3} ms | Average Position update: {:.3} ms | Average Overhead: {:.3} ms",
+                                avg_force,
+                                avg_position,
+                                avg_overhead
+                            );
+                            println!("\nSimulation complete. Exiting.");
+                            window_target.exit();
                         }
                     }
                 },
