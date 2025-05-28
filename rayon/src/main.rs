@@ -8,11 +8,14 @@ use rayon::prelude::*;
 use std::time::Instant;
 
 const SHOW_VISUALS: bool = false;
-const SHOW_TIMES: bool = false;
+const SHOW_TIMES: bool = true;
 const SHOW_POSITIONS: bool = false;
-const SHOWTIMES_EVERY: usize = 10;
+const SHOWTIMES_EVERY: usize = 100;
+const PRINT_EVERY: bool = false;
 
-const NUM_BIRDS: usize = 750;
+const SUMMARY_EVERY: usize = 1000;
+
+const NUM_BIRDS: usize = 5000;
 
 const POV_DISTANCE: f32 = 17.5;
 
@@ -141,7 +144,22 @@ fn main() {
     let mut birds: Vec<Bird> = (0..NUM_BIRDS).map(|_| Bird::new(&mut rng)).collect();
 
     let mut step_count = 0;
+    let mut total_steps = 0;
     let mut perf_start = Instant::now();
+    let mut summary_start = Instant::now();
+
+    let mut total_overhead_time = 0.0;
+    let mut total_calc_time = 0.0;
+
+    let mut cumulative_overhead_time = 0.0;
+    let mut cumulative_calc_time = 0.0;
+
+    println!("\n\nStarting simulation with {} birds using Rayon", NUM_BIRDS);
+    if SHOW_VISUALS {
+        println!("Visuals enabled.\n");
+    } else {
+        println!("Visuals disabled.\n");
+    }
 
     #[allow(deprecated)] 
     let _ = event_loop.run(move |event, window_target| {
@@ -154,17 +172,21 @@ fn main() {
                 },
 
                 winit::event::WindowEvent::RedrawRequested => {
-
                     if SHOW_TIMES && step_count == 0 {
                         perf_start = Instant::now();
                     }
+    
+                    if total_steps == 0 {
+                        summary_start = Instant::now();
+                    }
+    
+                    let step_start = Instant::now();
 
                     // --- Flocking update (parallel) ---
-
-                    // Clone birds for safe parallel neighbor access
                     let birds_snapshot = birds.clone();
 
-                    // Update each bird in parallel
+                    let calc_start = Instant::now();
+
                     birds.par_iter_mut().enumerate().for_each(|(i, bird)| {
                         let mut separation = Vector3::zeros();
                         let mut alignment = Vector3::zeros();
@@ -231,6 +253,10 @@ fn main() {
                         }
                     });
 
+                    let calc_time = calc_start.elapsed().as_secs_f64();
+                    total_calc_time += calc_time;
+                    cumulative_calc_time += calc_time;
+
                     // --- Rendering ---
                     if SHOW_VISUALS {
                         let mut target = display.draw();
@@ -261,18 +287,66 @@ fn main() {
 
                         target.finish().unwrap();
                     }
+
+                    let overhead_time = step_start.elapsed().as_secs_f64() - calc_time;
+                    total_overhead_time += overhead_time;
+                    cumulative_overhead_time += overhead_time;
                     
                     if SHOW_TIMES {
                         step_count += 1;
-                        if step_count >= SHOWTIMES_EVERY {
+                        total_steps += 1;
+    
+                        // In the RedrawRequested event handler, replace the print sections:
+
+                        if step_count % SHOWTIMES_EVERY == 0 && PRINT_EVERY {
                             let elapsed = perf_start.elapsed();
+                            let avg_time_per_step = elapsed.as_secs_f64() / SHOWTIMES_EVERY as f64;
+                            let fps = 1.0 / avg_time_per_step;
+                            
+                            let avg_calc_time = total_calc_time / SHOWTIMES_EVERY as f64;
+                            let avg_overhead = total_overhead_time / SHOWTIMES_EVERY as f64;
+
                             println!(
-                                "Simulated {} steps in {:.3} seconds ({:.3} ms/step)",
-                                SHOWTIMES_EVERY,
+                                "Simulated steps {}-{} in {:.3} seconds ({:.3} ms/step, {:.2} FPS)",
+                                total_steps - SHOWTIMES_EVERY,
+                                total_steps,
                                 elapsed.as_secs_f64(),
-                                elapsed.as_secs_f64() * 1000.0 / SHOWTIMES_EVERY as f64
+                                avg_time_per_step * 1000.0,
+                                fps
                             );
-                            step_count = 0;
+                            println!(
+                                "Calculation: {:.3} ms | Overhead: {:.3} ms | Total: {:.3} ms",
+                                avg_calc_time * 1000.0,
+                                avg_overhead * 1000.0,
+                                (avg_calc_time + avg_overhead) * 1000.0
+                            );
+                            
+                            // Reset counters for the next batch
+                            total_calc_time = 0.0;
+                            total_overhead_time = 0.0;
+                            perf_start = Instant::now();
+                        }
+
+                        if total_steps % SUMMARY_EVERY == 0 {
+                            let summary_elapsed = summary_start.elapsed();
+                            let avg_fps = SUMMARY_EVERY as f64 / summary_elapsed.as_secs_f64();
+
+                            let avg_calc = (cumulative_calc_time / SUMMARY_EVERY as f64) * 1000.0;
+                            let avg_overhead = (cumulative_overhead_time / SUMMARY_EVERY as f64) * 1000.0;
+
+                            println!(
+                                "\n\nSimulated {} steps in {:.3} seconds at {:.2} FPS avg",
+                                SUMMARY_EVERY,
+                                summary_elapsed.as_secs_f64(),
+                                avg_fps
+                            );
+                            println!(
+                                "Average Calculation: {:.3} ms | Average Overhead: {:.3} ms",
+                                avg_calc,
+                                avg_overhead
+                            );
+                            println!("\nSimulation complete. Exiting.");
+                            window_target.exit();
                         }
                     }
                 },

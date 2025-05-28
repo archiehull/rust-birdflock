@@ -9,7 +9,7 @@ use std::time::Instant;
 use threadpool::ThreadPool;
 use num_cpus;
 
-const SHOW_VISUALS: bool = false;
+const SHOW_VISUALS: bool = true;
 const SHOW_TIMES: bool = true;
 const SHOW_POSITIONS: bool = false;
 const SHOWTIMES_EVERY: usize = 100;
@@ -18,7 +18,7 @@ const PRINT_EVERY: bool = false; // Print every SHOWTIMES_EVERY steps
 const SUMMARY_EVERY: usize = 1000;
 
 
-const NUM_BIRDS: usize = 5000;
+const NUM_BIRDS: usize = 10000;
 
 const POV_DISTANCE: f32 = 17.5;
 
@@ -266,17 +266,10 @@ fn main() {
 
                     // --- Flocking update with thread pool ---
                     
-                    // Create a snapshot of the current state for read-only access
                     let birds_snapshot = birds.clone();
-                    
-                    // Create a vector to store the updated positions and velocities
                     let results = Arc::new(Mutex::new(vec![(Vector3::zeros(), Vector3::zeros()); NUM_BIRDS]));
-                    
-                    // Split work across threads - calculate actual number of tasks
                     let chunk_size = (NUM_BIRDS + num_threads - 1) / num_threads;
                     let num_tasks = (NUM_BIRDS + chunk_size - 1) / chunk_size;
-                    
-                    // Use a counter to track completed jobs instead of a barrier
                     let completed_count = Arc::new(Mutex::new(0));
 
                     let force_start = Instant::now();
