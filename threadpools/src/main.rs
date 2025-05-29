@@ -17,8 +17,7 @@ const PRINT_EVERY: bool = false; // Print every SHOWTIMES_EVERY steps
 
 const SUMMARY_EVERY: usize = 1000;
 
-
-const NUM_BIRDS: usize = 10000;
+const NUM_BIRDS: usize = 500;
 
 const POV_DISTANCE: f32 = 17.5;
 
@@ -41,7 +40,6 @@ struct Bird {
 }
 
 impl Bird {
-    // Create a new bird with random position and velocity
     fn new<R: Rng>(rng: &mut R) -> Self {
         Bird {
             position: Vector3::new(
@@ -232,6 +230,9 @@ fn main() {
     let mut total_position_update_time = 0.0;
     let mut total_overhead_time = 0.0;
 
+    let mut total_force_update_time = 0.0;
+    let mut cumulative_force_update_time = 0.0;
+
     let mut cumulative_force_time = 0.0;
     let mut cumulative_position_time = 0.0;
     let mut cumulative_overhead_time = 0.0;
@@ -268,10 +269,11 @@ fn main() {
                     
                     let birds_snapshot = birds.clone();
                     let results = Arc::new(Mutex::new(vec![(Vector3::zeros(), Vector3::zeros()); NUM_BIRDS]));
-                    let chunk_size = (NUM_BIRDS + num_threads - 1) / num_threads;
-                    let num_tasks = (NUM_BIRDS + chunk_size - 1) / chunk_size;
                     let completed_count = Arc::new(Mutex::new(0));
 
+                    let chunk_size = (NUM_BIRDS + num_threads - 1) / num_threads;
+                    let num_tasks = (NUM_BIRDS + chunk_size - 1) / chunk_size;
+                    
                     let force_start = Instant::now();
                     
                     for thread_id in 0..num_tasks {
@@ -283,7 +285,6 @@ fn main() {
                         let completed_count = Arc::clone(&completed_count);
                         
                         pool.execute(move || {
-                            // Process this thread's chunk of birds
                             let mut local_results = Vec::new();
                             
                             for i in start..end {
@@ -291,13 +292,10 @@ fn main() {
                                 local_results.push((i, update));
                             }
                             
-                            // Store results in the shared results vector
                             let mut results_guard = results.lock().unwrap();
                             for (i, update) in local_results {
                                 results_guard[i] = update;
                             }
-                            
-                            // Increment the completed count
                             let mut count = completed_count.lock().unwrap();
                             *count += 1;
                         });
@@ -306,18 +304,21 @@ fn main() {
                     let force_calc_time = force_start.elapsed().as_secs_f64();
                     total_force_calc_time += force_calc_time;
                     cumulative_force_time += force_calc_time;
-                    
+
                     // Wait for all tasks to complete
                     let wait_start = Instant::now();
                     while *completed_count.lock().unwrap() < num_tasks {
-                        std::thread::sleep(std::time::Duration::from_micros(10));
+                        std::thread::sleep(std::time::Duration::from_micros(5));
 
-                        // Safety timeout - don't wait forever if there's a problem
                         if wait_start.elapsed().as_secs() > 5 {
                             println!("Warning: Tasks taking too long, continuing anyway");
                             break;
                         }
                     }
+
+                    let wait_time = wait_start.elapsed().as_secs_f64();
+                    total_force_update_time += wait_time;
+                    cumulative_force_update_time += wait_time;
 
                     let pos_update_start = Instant::now();
                     // Update birds with the calculated results
@@ -377,7 +378,7 @@ fn main() {
                             let fps = 1.0 / avg_time_per_step;
                             
                              
-                            let avg_force_calc = total_force_calc_time / SHOWTIMES_EVERY as f64;
+                            let avg_force_calc = total_force_calc_time + total_force_update_time / SHOWTIMES_EVERY as f64;
                             let avg_position_update = total_position_update_time / SHOWTIMES_EVERY as f64;
                             let avg_overhead = total_overhead_time / SHOWTIMES_EVERY as f64;
 
@@ -408,19 +409,22 @@ fn main() {
                             let avg_fps = SUMMARY_EVERY as f64 / summary_elapsed.as_secs_f64();
 
                             let avg_force = (cumulative_force_time / SUMMARY_EVERY as f64) * 1000.0;
+                            let avg_force_update = (cumulative_force_update_time / SUMMARY_EVERY as f64) * 1000.0;
                             let avg_position = (cumulative_position_time / SUMMARY_EVERY as f64) * 1000.0;
                             let avg_overhead = (cumulative_overhead_time / SUMMARY_EVERY as f64) * 1000.0;
 
                             println!(
-                                "\n\nSimulated {} steps in {:.3} seconds at {:.2} FPS avg",
+                                "\n\nSimulated {} steps in {:.3} seconds at {:.0} FPS",
                                 SUMMARY_EVERY,
                                 summary_elapsed.as_secs_f64(),
                                 avg_fps
                             );
                             println!(
-                                "Average Force calculation: {:.3} ms | Average Position update: {:.3} ms | Average Overhead: {:.3} ms",
+                                "Average Force calculation: {:.3} ms | Average Force update: {:.3} ms | Average Position update: {:.3} ms |\nAverage Calcuation {:.3} ms | Average Overhead: {:.3} ms",
                                 avg_force,
+                                avg_force_update,
                                 avg_position,
+                                avg_force + avg_force_update + avg_position,
                                 avg_overhead
                             );
                             println!("\nSimulation complete. Exiting.");

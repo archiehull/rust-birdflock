@@ -7,7 +7,7 @@ use rand::Rng;
 use rayon::prelude::*;
 use std::time::Instant;
 
-const SHOW_VISUALS: bool = false;
+const SHOW_VISUALS: bool = true;
 const SHOW_TIMES: bool = true;
 const SHOW_POSITIONS: bool = false;
 const SHOWTIMES_EVERY: usize = 100;
@@ -15,7 +15,7 @@ const PRINT_EVERY: bool = false;
 
 const SUMMARY_EVERY: usize = 1000;
 
-const NUM_BIRDS: usize = 5000;
+const NUM_BIRDS: usize = 10000;
 
 const POV_DISTANCE: f32 = 17.5;
 
@@ -335,7 +335,7 @@ fn main() {
                             let avg_overhead = (cumulative_overhead_time / SUMMARY_EVERY as f64) * 1000.0;
 
                             println!(
-                                "\n\nSimulated {} steps in {:.3} seconds at {:.2} FPS avg",
+                                "\n\nSimulated {} steps in {:.3} seconds at {:.0} FPS",
                                 SUMMARY_EVERY,
                                 summary_elapsed.as_secs_f64(),
                                 avg_fps
